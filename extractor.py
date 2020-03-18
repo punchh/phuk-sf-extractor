@@ -12,10 +12,6 @@ def uploads_to_s3(target_file_path,s3_target_bucket,s3_target_key ):
         import boto3
         from botocore.exceptions import NoCredentialsError
 
-        # ACCESS_KEY = 'AKIAYRCJSSIESEGTCU4R'
-        # SECRET_KEY = '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'
-
-
         s3 = boto3.client('s3')
 
         try:
