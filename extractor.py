@@ -3,11 +3,34 @@ from pathlib import Path
 import csv
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logging.getLogger().setLevel(logging.INFO)
 
 logging.info('getting the logger ready\n')
+
+
+def daterange(date1, date2):
+    """
+    :param date1: Start date
+    :param date2: End date
+    :return: Return range of dataes
+    """
+    for n in range(int((date2 - date1).days)):
+        yield date1 + timedelta(n)
+
+
+def get_start_date(sql_conn, sql_cursor,mysql_phuk_sf_extractor):
+    try:
+        select_query_str="select date(max(job_end_time)) as date from {mysql_phuk_sf_extractor}  where load_status='Success' "\
+            .format(mysql_phuk_sf_extractor=mysql_phuk_sf_extractor)
+        sql_cursor.execute(select_query_str)
+        records = sql_cursor.fetchall()
+        start_date = records[0]['date']
+        return start_date
+    except Exception as e:
+        logging.info("Exception occured is", e)
+
 
 def insert_job_log(conn,cursor,job_start_time,insert_record_count,mysql_phuk_sf_extractor,status):
     try:
@@ -17,8 +40,6 @@ def insert_job_log(conn,cursor,job_start_time,insert_record_count,mysql_phuk_sf_
         args = (job_start_time, datetime.now(),status, insert_record_count)
         cursor.execute(insert_query_str, args)
         conn.commit()
-        conn.close()
-        cursor.close()
         logging.info("inserted record to mysql table %s" )
         return
     except Exception as e:
@@ -136,22 +157,32 @@ def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket
                 dbuser="mysql",
                 secret_file=snowflake_secret_home
             )
+            start_date=get_start_date(sql_conn, sql_cursor,mysql_phuk_sf_extractor)
             conn, cursor = gen_snowflake_conn(
                     dbuser=snowflake_user,
                     secret_file=snowflake_secret_home,
                     verbose=0,
             )
-            query_str = """select * from {tablename} WHERE TO_DATE(timestamp )=DATEADD(Day ,-1, current_date) """.\
-                    format(tablename="PIZZAHUT_PRODUCTION_ODS.PUBLIC.SENDGRID_EVENTS")
-            logging.info(query_str)
-            cursor.execute(query_str)
-            records = cursor.fetchall()
-            record_count=len(records)
-            logging.info("the total number of records are %s" %record_count)
-            load_csv(records, target_file_path, s3_target_bucket, s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,
-                     sql_conn, sql_cursor)
+            from datetime import datetime, timedelta, date
+            start_dt = datetime.strptime(str(start_date), '%Y-%m-%d').date()
+            end_dt = datetime.strptime(str(date.today()), '%Y-%m-%d').date()
+
+            for dt in daterange(start_dt, end_dt):
+
+                query_str = """select * from {tablename} WHERE TO_DATE(timestamp )='{dt}' """.\
+                        format(tablename="PIZZAHUT_PRODUCTION_ODS.PUBLIC.SENDGRID_EVENTS",dt=dt)
+                logging.info(query_str)
+                cursor.execute(query_str)
+                records = cursor.fetchall()
+                record_count=len(records)
+                logging.info("the total number of records are %s" %record_count)
+                load_csv(records, target_file_path, s3_target_bucket, s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,
+                         sql_conn, sql_cursor)
         except Exception as e:
             logging.info("Exception while querying %s" %e)
+        finally:
+            sql_conn.close()
+            sql_cursor.close()
 
 
 if __name__ == '__main__':
@@ -167,4 +198,4 @@ if __name__ == '__main__':
         args = vars(args)
         logging.info("Cmd line args:\n{}".format(json.dumps(args, sort_keys=True, indent=4)))
         main(**args)
-        print("Program ran successfull")
+        print("Program ran successfully")
