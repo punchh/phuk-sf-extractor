@@ -1,32 +1,60 @@
-from db_utility import gen_snowflake_conn
+from db_utility import gen_snowflake_conn, gen_mysql_conn
 from pathlib import Path
 import csv
 import logging
 import json
+from datetime import datetime
 
 logging.getLogger().setLevel(logging.INFO)
 
 logging.info('getting the logger ready\n')
 
-def uploads_to_s3(target_file_path,s3_target_bucket,s3_target_key ):
+def insert_job_log(conn,cursor,job_start_time,insert_record_count,mysql_phuk_sf_extractor,status):
+    try:
+        insert_query_str = "insert into {mysql_phuk_sf_extractor}(job_start_time,job_end_time," \
+                           "load_status,rows_inserted)VALUES(%s,%s,%s,%s)".\
+            format(mysql_phuk_sf_extractor=mysql_phuk_sf_extractor)
+        args = (job_start_time, datetime.now(),status, insert_record_count)
+        cursor.execute(insert_query_str, args)
+        conn.commit()
+        conn.close()
+        cursor.close()
+        logging.info("inserted record to mysql table %s" )
+        return
+    except Exception as e:
+        logging.info("Error inserting record to mysql table %s" %e)
+
+
+def uploads_to_s3(target_file_path,s3_target_bucket,s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,conn, cursor
+                  ):
         import boto3
         from botocore.exceptions import NoCredentialsError
-
         s3 = boto3.client('s3')
-
         try:
                 s3.upload_file(target_file_path, s3_target_bucket, s3_target_key)
-                print("Upload Successful")
+                logging.info("Upload Successfully")
+                logging.info("File is uploaded to the path %s" % s3_target_bucket+s3_target_key)
+                insert_job_log(conn,cursor,job_start_time,record_count,
+                                   mysql_phuk_sf_extractor,status='Success')
                 return True
         except FileNotFoundError:
-                print("The file was not found")
+                logging.info("The file was not found")
+                insert_job_log(conn, cursor, job_start_time, record_count,
+                               mysql_phuk_sf_extractor, status='Failed')
                 return False
         except NoCredentialsError:
-                print("Credentials not available")
+                insert_job_log(conn, cursor, job_start_time, record_count,
+                           mysql_phuk_sf_extractor, status='Failed')
+                logging.info("Credentials not available")
                 return False
+        except Exception as e:
+                logging.info("Failed uploading a file %s" %e)
+                insert_job_log(conn, cursor, job_start_time, record_count,
+                               mysql_phuk_sf_extractor, status='Failed')
 
 
-def load_csv(records,target_file_path,s3_target_bucket,s3_target_key ):
+def load_csv(records,target_file_path,s3_target_bucket,s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,
+             conn, cursor):
         feilds = ["_METADATA__PARENT_UUID",
                   "_METADATA__TIMESTAMP",
                   "_METADATA__UUID",
@@ -79,37 +107,51 @@ def load_csv(records,target_file_path,s3_target_bucket,s3_target_key ):
                   "NEWSLETTER",
                   "BUSINESS_UUID"]
         # writing to csv file
-        with open(target_file_path, 'w') as csvfile:
-                # creating a csv writer object
-                csvwriter = csv.writer(csvfile)
+        try:
+            with open(target_file_path, 'w') as csvfile:
+                    # creating a csv writer object
+                    csvwriter = csv.writer(csvfile)
+                    # writing the fields
+                    csvwriter.writerow(feilds)
+                    # writing the data rows
+                    csvwriter.writerows(records)
+            logging.info("Csv file created")
+            uploads_to_s3(target_file_path,s3_target_bucket,s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,
+                          conn, cursor)
+        except Exception as e:
+            logging.info("Exception while writing %s" % e)
 
-                # writing the fields
-                csvwriter.writerow(feilds)
-
-                # writing the data rows
-                csvwriter.writerows(records)
-        print("done with writing")
-        uploads_to_s3(target_file_path,s3_target_bucket,s3_target_key)
 
 
-def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket,s3_target_key ):
-        from datetime import date, timedelta
-        yesterday_date = date.today() - timedelta(1)
-        snowflake_secret_home = str(Path.home()) + snowflake_secret
-        target_file_name = "/pizzahut_uk_" + str(yesterday_date) + ".csv"
-        target_file_path= str(Path.home())+"/"+target_file_local_path + target_file_name
-        s3_target_key= s3_target_key + target_file_name
-        conn, cursor = gen_snowflake_conn(
-                dbuser=snowflake_user,
-                secret_file=snowflake_secret_home,
-                verbose=0,
-        )
-        print("connecte",conn,cursor)
-        query_str = """select * from {tablename} WHERE TO_DATE(timestamp )=DATEADD(Day ,-1, current_date) """.\
-                format(tablename="PIZZAHUT_PRODUCTION_ODS.PUBLIC.SENDGRID_EVENTS")
-        cursor.execute(query_str)
-        records = cursor.fetchall()
-        load_csv(records, target_file_path,s3_target_bucket,s3_target_key)
+def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket,s3_target_key,mysql_phuk_sf_extractor):
+        try:
+            from datetime import date,datetime, timedelta
+            job_start_time = datetime.now()
+            yesterday_date = date.today() - timedelta(1)
+            snowflake_secret_home = str(Path.home()) + snowflake_secret
+            target_file_name = "/pizzahut_uk_" + str(yesterday_date) + ".csv"
+            target_file_path= str(Path.home())+"/"+target_file_local_path + target_file_name
+            s3_target_key= s3_target_key + target_file_name
+            sql_conn, sql_cursor = gen_mysql_conn(
+                dbuser="mysql",
+                secret_file=snowflake_secret_home
+            )
+            conn, cursor = gen_snowflake_conn(
+                    dbuser=snowflake_user,
+                    secret_file=snowflake_secret_home,
+                    verbose=0,
+            )
+            query_str = """select * from {tablename} WHERE TO_DATE(timestamp )=DATEADD(Day ,-1, current_date) """.\
+                    format(tablename="PIZZAHUT_PRODUCTION_ODS.PUBLIC.SENDGRID_EVENTS")
+            logging.info(query_str)
+            cursor.execute(query_str)
+            records = cursor.fetchall()
+            record_count=len(records)
+            logging.info("the total number of records are %s" %record_count)
+            load_csv(records, target_file_path, s3_target_bucket, s3_target_key,job_start_time,mysql_phuk_sf_extractor,record_count,
+                     sql_conn, sql_cursor)
+        except Exception as e:
+            logging.info("Exception while querying %s" %e)
 
 
 if __name__ == '__main__':
@@ -120,6 +162,7 @@ if __name__ == '__main__':
         parser.add_argument("--target_file_local_path", default="daily_pizzahut_uk_files")
         parser.add_argument("--s3_target_bucket", default="pizzahut-prod-ra")
         parser.add_argument("--s3_target_key", default="FILES_SHARED/YUM2MANTHAN/BI/MARKETING/Customer360Project/Punch_Activity_Data")
+        parser.add_argument("--mysql_phuk_sf_extractor", default="audit.mysql_phuk_sf_extractor")
         args = parser.parse_args()
         args = vars(args)
         logging.info("Cmd line args:\n{}".format(json.dumps(args, sort_keys=True, indent=4)))

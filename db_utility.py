@@ -1,9 +1,30 @@
 import json
 import snowflake.connector
-
+import pymysql
 import logging
 
 logging.getLogger().setLevel(logging.INFO)
+
+
+def gen_mysql_conn(dbuser, secret_file, dbname=None, verbose=1):
+    """Create mysql connection
+    """
+    with open(secret_file, "r") as f:
+        params = json.load(f)
+        if dbname is None:
+            dbname = params[dbuser]["dbname"]
+        conn = pymysql.connect(
+            host=params[dbuser]["host"],
+            user=params[dbuser]["user"],
+            passwd=params[dbuser]["password"],
+            database=params[dbuser]["dbname"] if dbname is None else dbname,
+            port=params[dbuser]["port"],
+        )
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        if verbose >= 1:
+            logging.info(f"Successfully connected with mysql: {dbname}")
+    return conn, cursor
+
 
 
 def gen_snowflake_conn(
