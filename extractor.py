@@ -150,9 +150,6 @@ def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket
             job_start_time = datetime.now()
             yesterday_date = date.today() - timedelta(1)
             snowflake_secret_home = str(Path.home()) + snowflake_secret
-            target_file_name = "/pizzahut_uk_" + str(yesterday_date) + ".csv"
-            target_file_path= str(Path.home())+"/"+target_file_local_path + target_file_name
-            s3_target_key= s3_target_key + target_file_name
             sql_conn, sql_cursor = gen_mysql_conn(
                 dbuser="mysql",
                 secret_file=snowflake_secret_home
@@ -168,6 +165,9 @@ def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket
             end_dt = datetime.strptime(str(date.today()), '%Y-%m-%d').date()
 
             for dt in daterange(start_dt, end_dt):
+                target_file_name = "/pizzahut_uk_" + str(dt) + ".csv"
+                target_file_path = str(Path.home()) + "/" + target_file_local_path + target_file_name
+                s3_target_key = s3_target_key + target_file_name
 
                 query_str = """select * from {tablename} WHERE TO_DATE(timestamp )='{dt}' """.\
                         format(tablename="PIZZAHUT_PRODUCTION_ODS.PUBLIC.SENDGRID_EVENTS",dt=dt)
@@ -183,6 +183,8 @@ def main(snowflake_user,snowflake_secret,target_file_local_path,s3_target_bucket
         finally:
             sql_conn.close()
             sql_cursor.close()
+            conn.close()
+            cursor.close()
 
 
 if __name__ == '__main__':
